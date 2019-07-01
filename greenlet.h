@@ -19,15 +19,15 @@ extern "C" {
 
 typedef struct _greenlet {
 	PyObject_HEAD
-	char* stack_start;
-	char* stack_stop;
-	char* stack_copy;
-	intptr_t stack_saved;
-	struct _greenlet* stack_prev;
+	char* stack_start;  // 栈顶
+	char* stack_stop;   // 栈底
+	char* stack_copy;			// heap 数据底子
+	intptr_t stack_saved;		// heap 数据大小
+	struct _greenlet* stack_prev;	// _greenlet 链，The main (initial) gr 是最后一个
 	struct _greenlet* parent;
 	PyObject* run_info;
 	struct _frame* top_frame;
-	int recursion_depth;
+	int recursion_depth;		// 栈深度
 	PyObject* weakreflist;
 #ifdef GREENLET_USE_EXC_INFO
 	_PyErr_StackItem* exc_info;
@@ -40,8 +40,8 @@ typedef struct _greenlet {
 	PyObject* dict;
 } PyGreenlet;
 
-#define PyGreenlet_Check(op)      PyObject_TypeCheck(op, &PyGreenlet_Type)
-#define PyGreenlet_MAIN(op)       (((PyGreenlet*)(op))->stack_stop == (char*) -1)
+#define PyGreenlet_Check(op)      PyObject_TypeCheck(op, &PyGreenlet_Type)  // 类型检测
+#define PyGreenlet_MAIN(op)       (((PyGreenlet*)(op))->stack_stop == (char*) -1)  // 是否栈底
 #define PyGreenlet_STARTED(op)    (((PyGreenlet*)(op))->stack_stop != NULL)
 #define PyGreenlet_ACTIVE(op)     (((PyGreenlet*)(op))->stack_start != NULL)
 #define PyGreenlet_GET_PARENT(op) (((PyGreenlet*)(op))->parent)

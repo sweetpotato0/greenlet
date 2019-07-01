@@ -46,22 +46,37 @@ slp_switch(void)
     unsigned short cw;
     register long *stackref, stsizediff;
     __asm__ volatile ("" : : : REGS_TO_SAVE);
-    __asm__ volatile ("fstcw %0" : "=m" (cw));
+    __asm__ volatile ("fstcw %0" : "=m" (cw));  // 浮点检查保存控制器
     __asm__ volatile ("stmxcsr %0" : "=m" (csr));
+    //这里先获取以及保存rbp,rbx,rsp三个寄存器的数据
     __asm__ volatile ("movq %%rbp, %0" : "=m" (rbp));
     __asm__ volatile ("movq %%rbx, %0" : "=m" (rbx));
-    __asm__ ("movq %%rsp, %0" : "=g" (stackref));
+    __asm__ ("movq %%rsp, %0" : "=g" (stackref));  // //将栈顶的地址（rsp）保存到 stackref
     {
-        SLP_SAVE_STATE(stackref, stsizediff);
+        // 这里会将栈之间的偏移保存到 stsizediff 变量
+        // 这里是宏定义，如果要切换到的 greenlet 并没有运行，那么这里的宏定义里面就会提前返回1，那么 g_initialstub 里面就可以开始 run 的执行了
+        // 这里可以看到其实栈的保存是最终地址保存到 slp_switch 这一层的
+        SLP_SAVE_STATE(stackref, stsizediff);  // 把栈的信息保存到堆空间里面去
+
+        // 修改 rbp 以及 rsp 寄存器的值，用于将当前栈切换到要执行的 greenlet 的执行栈
+        // 将ebp和esp指向目标栈，从这里开始从目标栈开始运行
+        // 将ebp和esp都设置为stsizediff
         __asm__ volatile (
             "addq %0, %%rsp\n"
             "addq %0, %%rbp\n"
             :
             : "r" (stsizediff)
             );
+
+        // 恢复栈（target）中数据
+        // 切换到新的greenlet之后，需要恢复之前保存的栈上的数据
         SLP_RESTORE_STATE();
         __asm__ volatile ("xorq %%rax, %%rax" : "=a" (err));
     }
+
+    // 恢复的是之前保存在target栈中的变量
+    // 前后 rbp、rbx 的值已经改变了，因为栈的数据已经变化了
+    // 因为这里已经恢复了切换到的 greenlet 的栈信息，所以这里恢复的其实是切换到的 greenlet 的栈寄存器的地址
     __asm__ volatile ("movq %0, %%rbx" : : "m" (rbx));
     __asm__ volatile ("movq %0, %%rbp" : : "m" (rbp));
     __asm__ volatile ("ldmxcsr %0" : : "m" (csr));
@@ -76,7 +91,7 @@ slp_switch(void)
  * further self-processing support
  */
 
-/* 
+/*
  * if you want to add self-inspection tools, place them
  * here. See the x86_msvc for the necessary defines.
  * These features are highly experimental und not

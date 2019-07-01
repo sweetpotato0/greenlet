@@ -168,9 +168,11 @@ static void green_clear_exc(PyGreenlet* g)
 #endif
 }
 
+// 创建 main greenlet 对象
 static PyGreenlet* green_create_main(void)
 {
 	PyGreenlet* gmain;
+	// 获取当前线程的状态
 	PyObject* dict = PyThreadState_GetDict();
 	if (dict == NULL) {
 		if (!PyErr_Occurred())
@@ -182,7 +184,9 @@ static PyGreenlet* green_create_main(void)
 	gmain = (PyGreenlet*) PyType_GenericAlloc(&PyGreenlet_Type, 0);
 	if (gmain == NULL)
 		return NULL;
+	// 栈顶为1
 	gmain->stack_start = (char*) 1;
+	// 栈底。因为无符号，所以-1其实最大。因为栈有改地址想低地址扩展
 	gmain->stack_stop = (char*) -1;
 	gmain->run_info = dict;
 	Py_INCREF(dict);
@@ -450,6 +454,7 @@ static int GREENLET_NOINLINE(slp_save_state)(char* stackref)
 	return 0;
 }
 
+// 切换栈
 static int g_switchstack(void)
 {
 	/* Perform a stack switch according to some global variables
@@ -556,6 +561,8 @@ g_calltrace(PyObject* tracefunc, PyObject* event, PyGreenlet* origin, PyGreenlet
 }
 #endif
 
+// switch 方法最终执行这个方法
+// target 表示执行 switch 的 greenlet
 static PyObject *
 g_switch(PyGreenlet* target, PyObject* args, PyObject* kwargs)
 {
@@ -566,11 +573,14 @@ g_switch(PyGreenlet* target, PyObject* args, PyObject* kwargs)
 
 	/* check ts_current */
 	if (!STATE_OK) {
+		// 状态不对，返回。并对对应的参数引用计数减少
 		Py_XDECREF(args);
 		Py_XDECREF(kwargs);
 		return NULL;
 	}
+	// 获取运行信息
 	run_info = green_statedict(target);
+	// 运行信息为 NULL，或者不是当前线程信息
 	if (run_info == NULL || run_info != ts_current->run_info) {
 		Py_XDECREF(args);
 		Py_XDECREF(kwargs);
@@ -588,12 +598,15 @@ g_switch(PyGreenlet* target, PyObject* args, PyObject* kwargs)
 	while (target) {
 		if (PyGreenlet_ACTIVE(target)) {
 			ts_target = target;
-			err = g_switchstack();
+			err = g_switchstack();  // 切换到这个栈中去（汇编）
 			break;
 		}
-		if (!PyGreenlet_STARTED(target)) {
+		if (!PyGreenlet_STARTED(target)) {  // 如果都没有启动，那么需要初始化
+			// 这里创建了一个新的局部变量，其实是通过它的地址待会来分割新创建的栈，用其来做新栈的底部
 			void* dummymarker;
 			ts_target = target;
+
+			//对于没有启动的协程，这里需要进行初始化
 			err = g_initialstub(&dummymarker);
 			if (err == 1) {
 				continue; /* retry the switch */
@@ -611,7 +624,7 @@ g_switch(PyGreenlet* target, PyObject* args, PyObject* kwargs)
 	ts_passaround_args = NULL;
 	kwargs = ts_passaround_kwargs;
 	ts_passaround_kwargs = NULL;
-	if (err < 0) {
+	if (err < 0) {  // 切换出错
 		/* Turn switch errors into switch throws */
 		assert(ts_origin == NULL);
 		Py_CLEAR(kwargs);
@@ -707,6 +720,7 @@ g_handle_exit(PyObject *result)
 	return result;
 }
 
+// 对于创建了还没启动的 geenlet对象，调用 switch 就会调用进行初始化
 static int GREENLET_NOINLINE(g_initialstub)(void* mark)
 {
 	int err;
@@ -714,6 +728,8 @@ static int GREENLET_NOINLINE(g_initialstub)(void* mark)
 	PyObject *exc, *val, *tb;
 	PyObject *run_info;
 	PyGreenlet* self = ts_target;
+
+	// switch 传过来的参数
 	PyObject* args = ts_passaround_args;
 	PyObject* kwargs = ts_passaround_kwargs;
 
@@ -758,8 +774,8 @@ static int GREENLET_NOINLINE(g_initialstub)(void* mark)
 
 	/* start the greenlet */
 	self->stack_start = NULL;
-	self->stack_stop = (char*) mark;
-	if (ts_current->stack_start == NULL) {
+	self->stack_stop = (char*) mark;  // 将新创建的 mark 作为栈底地址
+	if (ts_current->stack_start == NULL) {  // 当前 greenlet 栈不存在
 		/* ts_current is dying */
 		self->stack_prev = ts_current->stack_prev;
 	}
@@ -878,6 +894,8 @@ static int green_init(PyGreenlet *self, PyObject *args, PyObject *kwargs)
 	PyObject *run = NULL;
 	PyObject* nparent = NULL;
 	static char *kwlist[] = {"run", "parent", 0};
+	// | 表明在Python参数列表中剩下的参数都是可选的
+	// : 格式单元的列表结束标志；冒号后的字符串被用来作为错误消息中的函数名(PyArg_ParseTuple() 函数引发的“关联值”异常)
 	if (!PyArg_ParseTupleAndKeywords(args, kwargs, "|OO:green", kwlist,
 	                                 &run, &nparent))
 		return -1;
@@ -1114,6 +1132,7 @@ PyDoc_STRVAR(green_switch_doc,
 "function will simply return the arguments using the same rules as\n"
 "above.\n");
 
+// python 暴露的 switch 方法
 static PyObject* green_switch(
 	PyGreenlet* self,
 	PyObject* args,
@@ -1456,6 +1475,7 @@ PyGreenlet_Throw(PyGreenlet *self, PyObject *typ, PyObject *val, PyObject *tb)
 
 /** End C API ****************************************************************/
 
+// 注册 python 的 API
 static PyMethodDef green_methods[] = {
 	{"switch", (PyCFunction)green_switch,
 	 METH_VARARGS | METH_KEYWORDS, green_switch_doc},
@@ -1614,6 +1634,7 @@ static char* copy_on_greentype[] = {
 #if PY_MAJOR_VERSION >= 3
 #define INITERROR return NULL
 
+// 定义模块
 static struct PyModuleDef greenlet_module_def = {
 	PyModuleDef_HEAD_INIT,
 	"greenlet",
@@ -1622,6 +1643,7 @@ static struct PyModuleDef greenlet_module_def = {
 	GreenMethods,
 };
 
+// 初始化模块
 PyMODINIT_FUNC
 PyInit_greenlet(void)
 #else
@@ -1634,7 +1656,7 @@ initgreenlet(void)
 	PyObject* m = NULL;
 	char** p = NULL;
 	PyObject *c_api_object;
-	static void *_PyGreenlet_API[PyGreenlet_API_pointers];
+	static void *_PyGreenlet_API[PyGreenlet_API_pointers];  // 8
 
 	GREENLET_NOINLINE_INIT();
 
@@ -1648,6 +1670,7 @@ initgreenlet(void)
 		INITERROR;
 	}
 
+	// 添加版本信息
 	if (PyModule_AddStringConstant(m, "__version__", GREENLET_VERSION) < 0)
 	{
 		INITERROR;
@@ -1707,6 +1730,7 @@ initgreenlet(void)
 		INITERROR;
 	}
 
+	// 创建 greenlet
 	ts_current = green_create_main();
 	if (ts_current == NULL)
 	{
